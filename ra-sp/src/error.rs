@@ -8,6 +8,7 @@ pub enum SpRaError {
     SigstructMismatched,
     EnclaveInDebugMode,
     EnclaveNotTrusted,
+    InvalidSpConfig(String)
 }
 
 impl std::convert::From<std::io::Error> for SpRaError {
@@ -44,7 +45,7 @@ impl std::error::Error for SpRaError {}
 
 #[derive(Debug)]
 pub enum AttestationError {
-    Connection(http::StatusCode),
+    Connection(http_bytes::http::StatusCode),
     MismatchedIASRootCertificate,
     InvalidIASCertificate,
     BadSignature,
@@ -53,8 +54,10 @@ pub enum AttestationError {
 #[derive(Debug)]
 pub enum IasError {
     IO(std::io::Error),
-    Connection(hyper::error::Error),
-    SigRLError(http::StatusCode),
+    Connection(sgx_crypto::mbedtls::Error),
+    BufferTooSmall,
+    HTTPError(http_bytes::Error),
+    SigRLError(http_bytes::http::StatusCode),
     Attestation(AttestationError),
 }
 
@@ -64,8 +67,14 @@ impl std::convert::From<std::io::Error> for IasError {
     }
 }
 
-impl std::convert::From<hyper::error::Error> for IasError {
-    fn from(e: hyper::error::Error) -> Self {
+impl std::convert::From<sgx_crypto::mbedtls::Error> for IasError {
+    fn from(e: sgx_crypto::mbedtls::Error) -> Self {
         Self::Connection(e)
+    }
+}
+
+impl std::convert::From<http_bytes::Error> for IasError {
+    fn from(e: http_bytes::Error) -> Self {
+        Self::HTTPError(e)
     }
 }

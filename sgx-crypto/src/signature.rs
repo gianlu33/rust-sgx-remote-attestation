@@ -1,5 +1,5 @@
 use super::digest::{sha256, SHA256_TYPE};
-use super::random::Rng;
+use super::Rng;
 use mbedtls::pk::Pk;
 use std::fs::File;
 use std::io::Read;
@@ -64,7 +64,7 @@ impl SigningKey {
         let sig_len = self.inner.rsa_public_modulus()?.byte_length()?;
         let mut signature = vec![0u8; sig_len];
         self.inner
-            .sign(SHA256_TYPE, &hash[..], &mut signature[..], &mut rng.inner)?;
+            .sign(SHA256_TYPE, &hash[..], &mut signature[..], rng)?;
         Ok(signature)
     }
 }

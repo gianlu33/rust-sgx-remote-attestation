@@ -1,5 +1,5 @@
 use crate::error::AttestationError;
-use hyper::header::{HeaderMap, HeaderValue};
+use http_bytes::http::header::{HeaderMap, HeaderValue};
 use regex::Regex;
 use serde::Deserialize;
 use serde_json::Value;

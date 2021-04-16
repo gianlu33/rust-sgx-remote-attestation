@@ -10,7 +10,7 @@ pub type Callback = Box<dyn FnMut(&mut HandshakeContext, &str) -> Result<()>>;
 
 pub fn new_server_context(psk: &[u8; 16]) -> Result<Context> {
     let rng = Arc::new(Rng);
-    let mut cb = Box::new(move |ctx: &mut HandshakeContext, _: &str| ctx.set_psk(psk));
+    let mut cb = |ctx: &mut HandshakeContext, _: &str| ctx.set_psk(psk);
     let mut config = Config::new(Endpoint::Server, Transport::Stream, Preset::Default);
     config.set_rng(rng);
     config.set_psk_callback(&mut cb);

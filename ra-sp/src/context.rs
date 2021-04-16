@@ -9,7 +9,7 @@ use sgx_crypto::certificate::X509Cert;
 use sgx_crypto::cmac::{Cmac, MacTag};
 use sgx_crypto::digest::{sha256, Sha256Digest};
 use sgx_crypto::key_exchange::{DHKEPublicKey, OneWayAuthenticatedDHKE};
-use sgx_crypto::random::Rng;
+use sgx_crypto::Rng;
 use sgx_crypto::signature::SigningKey;
 use sgxs::sigstruct;
 use std::convert::TryInto;
@@ -17,12 +17,12 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::path::Path;
 
-pub struct SpRaContext<'a> {
+pub struct SpRaContext {
     config: SpConfig,
     sigstruct: sigstruct::Sigstruct,
     ias_client: IasClient,
     sp_private_key: SigningKey,
-    rng: Rng<'a>,
+    rng: Rng,
     key_exchange: Option<OneWayAuthenticatedDHKE>,
     g_a: Option<DHKEPublicKey>,
     verification_digest: Option<Sha256Digest>,
@@ -30,7 +30,7 @@ pub struct SpRaContext<'a> {
     sk_mk: Option<(MacTag, MacTag)>,
 }
 
-impl<'a> SpRaContext<'a> {
+impl SpRaContext {
     pub fn init(mut config: SpConfig) -> SpRaResult<Self> {
         assert!(config.linkable, "Only Linkable Quote supported");
         assert!(!config.random_nonce, "Random nonces not supported");
@@ -56,7 +56,7 @@ impl<'a> SpRaContext<'a> {
 
         let cert = X509Cert::new_from_pem_file(Path::new(&config.ias_root_cert_pem_path))?;
 
-        let mut rng = Rng::new()?;
+        let mut rng = Rng;
         let key_exchange = OneWayAuthenticatedDHKE::generate_keypair(&mut rng)?;
 
         let mut sigstruct = File::open(Path::new(&config.sigstruct_path))?;
@@ -65,7 +65,7 @@ impl<'a> SpRaContext<'a> {
         Ok(Self {
             config,
             sigstruct,
-            ias_client: IasClient::new(cert),
+            ias_client: IasClient::new(cert)?,
             sp_private_key,
             rng,
             key_exchange: Some(key_exchange),
@@ -76,8 +76,49 @@ impl<'a> SpRaContext<'a> {
         })
     }
 
-    #[tokio::main]
-    pub async fn do_attestation(
+    pub fn init_from(mut config: SpConfig, sigstruct : sigstruct::Sigstruct, sp_private_key : SigningKey, cert : X509Cert) -> SpRaResult<SpRaContext> {
+        if !config.linkable {
+            return Err(SpRaError::InvalidSpConfig(String::from("Only Linkable Quote supported")))
+        }
+
+        if config.random_nonce {
+            return Err(SpRaError::InvalidSpConfig(String::from("Random nonces not supported")))
+        }
+
+        if config.use_platform_service {
+            return Err(SpRaError::InvalidSpConfig(String::from("Platform service not supported")))
+        }
+
+        if config.spid.is_empty() {
+            return Err(SpRaError::InvalidSpConfig(String::from("spid field is empty")))
+        }
+
+        if config.primary_subscription_key.is_empty() {
+            return Err(SpRaError::InvalidSpConfig(String::from("primary_subscription_key field is empty")))
+        }
+
+        // Preparing for binary search
+        config.quote_trust_options.sort();
+        config.pse_trust_options.as_mut().map(|v| v.sort());
+
+        let mut rng = Rng;
+        let key_exchange = OneWayAuthenticatedDHKE::generate_keypair(&mut rng)?;
+
+        Ok(SpRaContext {
+            config,
+            sigstruct,
+            ias_client: IasClient::new(cert)?,
+            sp_private_key,
+            rng,
+            key_exchange: Some(key_exchange),
+            g_a: None,
+            verification_digest: None,
+            smk: None,
+            sk_mk: None,
+        })
+    }
+
+    pub fn do_attestation(
         mut self,
         mut client_stream: &mut (impl Read + Write),
     ) -> SpRaResult<AttestationResult> {
@@ -92,7 +133,7 @@ impl<'a> SpRaContext<'a> {
             eprintln!("MSG1 received");
         }
 
-        let msg2 = self.process_msg_1(msg1).await?;
+        let msg2 = self.process_msg_1(msg1)?;
         if cfg!(feature = "verbose") {
             eprintln!("MSG1 processed");
         }
@@ -108,7 +149,7 @@ impl<'a> SpRaContext<'a> {
             eprintln!("MSG3 received");
         }
 
-        let (msg4, epid_pseudonym) = self.process_msg_3(msg3).await?;
+        let (msg4, epid_pseudonym) = self.process_msg_3(msg3)?;
         if cfg!(feature = "verbose") {
             eprintln!("MSG4 generated");
         }
@@ -140,11 +181,11 @@ impl<'a> SpRaContext<'a> {
         })
     }
 
-    pub async fn process_msg_1(&mut self, msg1: RaMsg1) -> SpRaResult<RaMsg2> {
+    pub fn process_msg_1(&mut self, msg1: RaMsg1) -> SpRaResult<RaMsg2> {
         // Get sigRL
         let sig_rl = self
             .ias_client
-            .get_sig_rl(&msg1.gid, &self.config.primary_subscription_key);
+            .get_sig_rl(&msg1.gid, &self.config.primary_subscription_key)?;
 
         let key_exchange = self.key_exchange.take().unwrap();
         let g_b = key_exchange.get_public_key()?;
@@ -182,11 +223,11 @@ impl<'a> SpRaContext<'a> {
             spid,
             quote_type,
             sign_gb_ga,
-            sig_rl.await?,
+            sig_rl,
         )?)
     }
 
-    pub async fn process_msg_3(&mut self, msg3: RaMsg3) -> SpRaResult<(RaMsg4, Option<String>)> {
+    pub fn process_msg_3(&mut self, msg3: RaMsg3) -> SpRaResult<(RaMsg4, Option<String>)> {
         // Integrity check
         if &msg3.g_a[..] != &self.g_a.as_ref().unwrap()[..] {
             return Err(SpRaError::IntegrityError);
@@ -204,8 +245,7 @@ impl<'a> SpRaContext<'a> {
         // TODO: use the secondary key as well
         let attestation_result = self
             .ias_client
-            .verify_attestation_evidence(&msg3.quote, &self.config.primary_subscription_key)
-            .await?;
+            .verify_attestation_evidence(&msg3.quote, &self.config.primary_subscription_key)?;
 
         if cfg!(feature = "verbose") {
             eprintln!("==============Attestation Result==============");

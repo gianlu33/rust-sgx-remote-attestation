@@ -1,5 +1,5 @@
 use super::cmac::{Cmac, MAC_LEN};
-use super::random::Rng;
+use super::Rng;
 use super::signature::{Signature, SigningKey, VerificationKey};
 use mbedtls::ecp::EcPoint;
 use mbedtls::pk::{EcGroupId, Pk};
@@ -17,7 +17,7 @@ pub struct DHKE {
 impl DHKE {
     pub fn generate_keypair(rng: &mut Rng) -> super::Result<Self> {
         Ok(Self {
-            inner: Pk::generate_ec(&mut rng.inner, ECGROUP_ID)?,
+            inner: Pk::generate_ec(rng, ECGROUP_ID)?,
         })
     }
 
@@ -40,7 +40,7 @@ impl DHKE {
         )?;
         let len = self
             .inner
-            .agree(&peer_public_key, &mut ikm[..], &mut rng.inner)?;
+            .agree(&peer_public_key, &mut ikm[..], rng)?;
         assert_eq!(len, SECRET_SHARE_LEN);
         let cmac_key = [0u8; MAC_LEN];
         let mut kdf = Cmac::new(&cmac_key[..])?;

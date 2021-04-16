@@ -6,6 +6,7 @@ edition = "2018"
 
 [features]
 example = ["byteorder"]
+verbose = []
 
 [dependencies]
 bincode = "1.2.1"

@@ -22,6 +22,7 @@ sgxs = "0.7.2"
 sgx-isa = "0.3.1"
 sgx-crypto = { path = "../sgx-crypto" }
 ra-common = { path = "../ra-common" }
+anyhow = "1.0.38"
 
 [[example]]
 name = "tls-sp"

@@ -8,7 +8,8 @@ pub enum SpRaError {
     SigstructMismatched,
     EnclaveInDebugMode,
     EnclaveNotTrusted,
-    InvalidSpConfig(String)
+    InvalidSpConfig(String),
+    GenericError(String)
 }
 
 impl std::convert::From<std::io::Error> for SpRaError {
@@ -49,6 +50,16 @@ pub enum AttestationError {
     MismatchedIASRootCertificate,
     InvalidIASCertificate,
     BadSignature,
+    BadHeader,
+    CertListError,
+}
+
+impl std::error::Error for AttestationError {}
+
+impl std::fmt::Display for AttestationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        write!(f, "{:?}", self)
+    }
 }
 
 #[derive(Debug)]
@@ -59,6 +70,14 @@ pub enum IasError {
     HTTPError(http_bytes::Error),
     SigRLError(http_bytes::http::StatusCode),
     Attestation(AttestationError),
+}
+
+impl std::error::Error for IasError {}
+
+impl std::fmt::Display for IasError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        write!(f, "{:?}", self)
+    }
 }
 
 impl std::convert::From<std::io::Error> for IasError {

@@ -4,6 +4,7 @@ use ra_common::msg::{Gid, Quote};
 use sgx_crypto::certificate::X509Cert;
 use std::io::Write;
 use std::sync::Arc;
+use anyhow::Result;
 
 use std::net::TcpStream;
 
@@ -64,8 +65,8 @@ pub struct IasClient {
 }
 
 impl IasClient {
-    pub fn new(root_ca_cert: X509Cert) -> Result<Self, IasError> {
-        let cert = Certificate::from_pem(CERT).unwrap();
+    pub fn new(root_ca_cert: X509Cert) -> Result<Self> {
+        let cert = Certificate::from_pem(CERT)?;
         let mut list = List::new();
         list.push(cert);
         let rng = Arc::new(Rng);
@@ -87,15 +88,14 @@ impl IasClient {
         &mut self,
         gid: &Gid,
         subscription_key: &str,
-    ) -> Result<Option<Vec<u8>>, IasError> {
+    ) -> Result<Option<Vec<u8>>> {
         let uri = format!(
             "{}{}{:02x}{:02x}{:02x}{:02x}",
             BASE_URI, SIG_RL_PATH, gid[0], gid[1], gid[2], gid[3]
         );
         let req = Request::get(uri)
             .header("Ocp-Apim-Subscription-Key", subscription_key)
-            .body(())
-            .unwrap();
+            .body(())?;
 
         http_bytes::write_request_header(&req, &mut self.ctx)?;
 
@@ -104,13 +104,13 @@ impl IasClient {
         let n = self.ctx.read(&mut buf)?;
         let (header, body) = match http_bytes::parse_response_header_easy(&buf[..n])? {
             Some(r) => r,
-            None    => return Err(IasError::BufferTooSmall)
+            None    => return Err(IasError::BufferTooSmall.into())
         };
 
         if header.status().as_u16() != 200 {
-            return Err(IasError::SigRLError(header.status()));
+            return Err(IasError::SigRLError(header.status()).into());
         }
-        if header.headers().get("content-length").unwrap() == "0" {
+        if header.headers().get("content-length").ok_or(AttestationError::BadHeader)? == "0" {
             return Ok(None);
         }
         let mut sig_rl = Vec::new();
@@ -123,7 +123,7 @@ impl IasClient {
         &mut self,
         quote: &Quote,
         subscription_key: &str,
-    ) -> Result<AttestationResponse, IasError> {
+    ) -> Result<AttestationResponse> {
         let uri = format!("{}{}", BASE_URI, REPORT_PATH);
         let quote_base64 = base64::encode(&quote[..]);
         let body = format!("{{\"isvEnclaveQuote\":\"{}\"}}", quote_base64);
@@ -132,8 +132,7 @@ impl IasClient {
             .header("Content-type", "application/json")
             .header("Ocp-Apim-Subscription-Key", subscription_key)
             .header("Content-Length", body.len())
-            .body(&body)
-            .unwrap();
+            .body(&body)?;
 
         http_bytes::write_request_header(&req, &mut self.ctx)?;
         self.ctx.write(body.as_bytes())?;
@@ -143,19 +142,18 @@ impl IasClient {
         let n = self.ctx.read(&mut buf)?;
         let (header, resp_body) = match http_bytes::parse_response_header_easy(&buf[..n])? {
             Some(r) => r,
-            None    => return Err(IasError::BufferTooSmall)
+            None    => return Err(IasError::BufferTooSmall.into())
         };
 
         if header.status().as_u16() != 200 {
             return Err(IasError::Attestation(AttestationError::Connection(
                 header.status(),
-            )));
+            )).into());
         }
 
         let mut body = Vec::new();
-        body.write_all(&resp_body).unwrap();
+        body.write_all(&resp_body)?;
 
         AttestationResponse::from_response(&self.root_ca_cert, header.headers(), body)
-            .map_err(|e| IasError::Attestation(e))
     }
 }

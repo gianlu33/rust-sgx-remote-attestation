@@ -1,7 +1,7 @@
 use crate::config::SpConfig;
 use crate::error::SpRaError;
 use crate::ias::IasClient;
-use crate::{AttestationResult, SpRaResult};
+use crate::AttestationResult;
 use byteorder::{LittleEndian, ReadBytesExt};
 use ra_common::derive_secret_keys;
 use ra_common::msg::{RaMsg0, RaMsg1, RaMsg2, RaMsg3, RaMsg4, Spid};
@@ -16,6 +16,7 @@ use std::convert::TryInto;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::Path;
+use anyhow::Result;
 
 pub struct SpRaContext {
     config: SpConfig,
@@ -31,7 +32,7 @@ pub struct SpRaContext {
 }
 
 impl SpRaContext {
-    pub fn init(mut config: SpConfig) -> SpRaResult<Self> {
+    pub fn init(mut config: SpConfig) -> Result<Self> {
         assert!(config.linkable, "Only Linkable Quote supported");
         assert!(!config.random_nonce, "Random nonces not supported");
         assert!(
@@ -76,25 +77,25 @@ impl SpRaContext {
         })
     }
 
-    pub fn init_from(mut config: SpConfig, sigstruct : sigstruct::Sigstruct, sp_private_key : SigningKey, cert : X509Cert) -> SpRaResult<SpRaContext> {
+    pub fn init_from(mut config: SpConfig, sigstruct : sigstruct::Sigstruct, sp_private_key : SigningKey, cert : X509Cert) -> Result<SpRaContext> {
         if !config.linkable {
-            return Err(SpRaError::InvalidSpConfig(String::from("Only Linkable Quote supported")))
+            return Err(SpRaError::InvalidSpConfig(String::from("Only Linkable Quote supported")).into())
         }
 
         if config.random_nonce {
-            return Err(SpRaError::InvalidSpConfig(String::from("Random nonces not supported")))
+            return Err(SpRaError::InvalidSpConfig(String::from("Random nonces not supported")).into())
         }
 
         if config.use_platform_service {
-            return Err(SpRaError::InvalidSpConfig(String::from("Platform service not supported")))
+            return Err(SpRaError::InvalidSpConfig(String::from("Platform service not supported")).into())
         }
 
         if config.spid.is_empty() {
-            return Err(SpRaError::InvalidSpConfig(String::from("spid field is empty")))
+            return Err(SpRaError::InvalidSpConfig(String::from("spid field is empty")).into())
         }
 
         if config.primary_subscription_key.is_empty() {
-            return Err(SpRaError::InvalidSpConfig(String::from("primary_subscription_key field is empty")))
+            return Err(SpRaError::InvalidSpConfig(String::from("primary_subscription_key field is empty")).into())
         }
 
         // Preparing for binary search
@@ -121,7 +122,7 @@ impl SpRaContext {
     pub fn do_attestation(
         mut self,
         mut client_stream: &mut (impl Read + Write),
-    ) -> SpRaResult<AttestationResult> {
+    ) -> Result<AttestationResult> {
         // Not using MSG0 for now.
         let _msg0: RaMsg0 = bincode::deserialize_from(&mut client_stream)?;
         if cfg!(feature = "verbose") {
@@ -161,18 +162,19 @@ impl SpRaContext {
         }
 
         if !msg4.is_enclave_trusted {
-            return Err(SpRaError::EnclaveNotTrusted);
+            return Err(SpRaError::EnclaveNotTrusted.into());
         }
         match msg4.is_pse_manifest_trusted {
             Some(t) => {
                 if !t {
-                    return Err(SpRaError::EnclaveNotTrusted);
+                    return Err(SpRaError::EnclaveNotTrusted.into());
                 }
             }
             None => {}
         }
 
-        let (signing_key, master_key) = self.sk_mk.take().unwrap();
+        let (signing_key, master_key) = self.sk_mk.take().
+            ok_or(SpRaError::GenericError(String::from("sk_mk empty")))?;
 
         Ok(AttestationResult {
             epid_pseudonym,
@@ -181,13 +183,14 @@ impl SpRaContext {
         })
     }
 
-    pub fn process_msg_1(&mut self, msg1: RaMsg1) -> SpRaResult<RaMsg2> {
+    pub fn process_msg_1(&mut self, msg1: RaMsg1) -> Result<RaMsg2> {
         // Get sigRL
         let sig_rl = self
             .ias_client
             .get_sig_rl(&msg1.gid, &self.config.primary_subscription_key)?;
 
-        let key_exchange = self.key_exchange.take().unwrap();
+        let key_exchange = self.key_exchange.take()
+            .ok_or(SpRaError::GenericError(String::from("key_exchange empty")))?;
         let g_b = key_exchange.get_public_key()?;
 
         // Sign and derive KDK and other secret keys
@@ -199,9 +202,9 @@ impl SpRaContext {
 
         // Obtain SHA-256(g_a || g_b || vk)
         let mut verification_msg = Vec::new();
-        verification_msg.write_all(&msg1.g_a).unwrap();
-        verification_msg.write_all(&g_b[..]).unwrap();
-        verification_msg.write_all(&vk).unwrap();
+        verification_msg.write_all(&msg1.g_a)?;
+        verification_msg.write_all(&g_b[..])?;
+        verification_msg.write_all(&vk)?;
         let verification_digest = sha256(&verification_msg[..])?;
 
         // Set context
@@ -210,15 +213,13 @@ impl SpRaContext {
         self.verification_digest = Some(verification_digest);
         self.g_a = Some(msg1.g_a.clone());
 
-        let spid: Spid = hex::decode(&self.config.spid)
-            .unwrap()
+        let spid: Spid = hex::decode(&self.config.spid)?
             .as_slice()
-            .try_into()
-            .unwrap();
+            .try_into()?;
         let quote_type = self.config.linkable as u16;
 
         Ok(RaMsg2::new(
-            self.smk.as_mut().unwrap(),
+            self.smk.as_mut().ok_or(SpRaError::GenericError(String::from("smk empty")))?,
             g_b,
             spid,
             quote_type,
@@ -227,18 +228,19 @@ impl SpRaContext {
         )?)
     }
 
-    pub fn process_msg_3(&mut self, msg3: RaMsg3) -> SpRaResult<(RaMsg4, Option<String>)> {
+    pub fn process_msg_3(&mut self, msg3: RaMsg3) -> Result<(RaMsg4, Option<String>)> {
         // Integrity check
-        if &msg3.g_a[..] != &self.g_a.as_ref().unwrap()[..] {
-            return Err(SpRaError::IntegrityError);
+        if &msg3.g_a[..] != &self.g_a.as_ref().ok_or(SpRaError::GenericError(String::from("g_a empty")))?[..] {
+            return Err(SpRaError::IntegrityError.into());
         }
-        if !msg3.verify_mac(self.smk.as_mut().unwrap()).is_ok() {
-            return Err(SpRaError::IntegrityError);
+        if !msg3.verify_mac(self.smk.as_mut().ok_or(SpRaError::GenericError(String::from("smk empty")))?).is_ok() {
+            return Err(SpRaError::IntegrityError.into());
         }
 
-        let quote_digest: Sha256Digest = (&msg3.quote.as_ref()[368..400]).try_into().unwrap();
-        if self.verification_digest.as_ref().unwrap() != &quote_digest {
-            return Err(SpRaError::IntegrityError);
+        let quote_digest: Sha256Digest = (&msg3.quote.as_ref()[368..400]).try_into()?;
+        if self.verification_digest.as_ref()
+            .ok_or(SpRaError::GenericError(String::from("verification_digest empty")))? != &quote_digest {
+            return Err(SpRaError::IntegrityError.into());
         }
 
         // Verify attestation evidence
@@ -256,14 +258,14 @@ impl SpRaContext {
         // Verify enclave identity
         let mrenclave = &msg3.quote[112..144];
         let mrsigner = &msg3.quote[176..208];
-        let isvprodid = (&msg3.quote[304..306]).read_u16::<LittleEndian>().unwrap();
-        let isvsvn = (&msg3.quote[306..308]).read_u16::<LittleEndian>().unwrap();
+        let isvprodid = (&msg3.quote[304..306]).read_u16::<LittleEndian>()?;
+        let isvsvn = (&msg3.quote[306..308]).read_u16::<LittleEndian>()?;
         if mrenclave != self.sigstruct.enclavehash.as_ref()
             || mrsigner != sha256(self.sigstruct.modulus.as_ref())?.as_ref()
             || isvprodid != self.sigstruct.isvprodid
             || isvsvn != self.sigstruct.isvsvn
         {
-            return Err(SpRaError::SigstructMismatched);
+            return Err(SpRaError::SigstructMismatched.into());
         }
 
         // Make sure the enclave is not in debug mode in production
@@ -292,7 +294,7 @@ impl SpRaContext {
                     .config
                     .pse_trust_options
                     .as_ref()
-                    .unwrap()
+                    .unwrap() // safe unwrap
                     .binary_search(&status)
                     .is_ok()
         });

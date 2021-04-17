@@ -11,6 +11,15 @@ pub enum EnclaveRaError {
     TargetinfoError
 }
 
+impl std::error::Error for EnclaveRaError {}
+
+impl std::fmt::Display for EnclaveRaError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>)
+        -> Result<(), std::fmt::Error> {
+            write!(f, "{:?}", self)
+        }
+}
+
 impl std::convert::From<sgx_crypto::error::CryptoError> for EnclaveRaError {
     fn from(e: sgx_crypto::error::CryptoError) -> Self {
         Self::Crypto(e)

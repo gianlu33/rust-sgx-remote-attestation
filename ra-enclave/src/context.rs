@@ -1,6 +1,5 @@
 use crate::error::EnclaveRaError;
 use crate::local_attestation;
-use crate::EnclaveRaResult;
 use ra_common::derive_secret_keys;
 use ra_common::msg::{Quote, RaMsg2, RaMsg3, RaMsg4};
 use sgx_crypto::cmac::{Cmac, MacTag};
@@ -11,6 +10,7 @@ use sgx_crypto::signature::VerificationKey;
 use sgx_isa::{Report, Targetinfo};
 use std::io::{Read, Write};
 use std::mem::size_of;
+use anyhow::Result;
 
 pub struct EnclaveRaContext {
     pub key_exchange: Option<OneWayAuthenticatedDHKE>,
@@ -18,7 +18,7 @@ pub struct EnclaveRaContext {
 }
 
 impl EnclaveRaContext {
-    pub fn init(sp_vkey_pem: &str) -> EnclaveRaResult<Self> {
+    pub fn init(sp_vkey_pem: &str) -> Result<Self> {
         let mut rng = Rng;
         let key_exchange = OneWayAuthenticatedDHKE::generate_keypair(&mut rng)?;
         Ok(Self {
@@ -30,7 +30,7 @@ impl EnclaveRaContext {
     pub fn do_attestation(
         mut self,
         mut client_stream: &mut (impl Read + Write),
-    ) -> EnclaveRaResult<(MacTag, MacTag)> {
+    ) -> Result<(MacTag, MacTag)> {
         let (sk, mk) = self.process_msg_2(client_stream)?;
         if cfg!(feature = "verbose") {
             eprintln!("MSG2 processed");
@@ -38,12 +38,12 @@ impl EnclaveRaContext {
 
         let msg4: RaMsg4 = bincode::deserialize_from(&mut client_stream)?;
         if !msg4.is_enclave_trusted {
-            return Err(EnclaveRaError::EnclaveNotTrusted);
+            return Err(EnclaveRaError::EnclaveNotTrusted.into());
         }
         match msg4.is_pse_manifest_trusted {
             Some(t) => {
                 if !t {
-                    return Err(EnclaveRaError::PseNotTrusted);
+                    return Err(EnclaveRaError::PseNotTrusted.into());
                 }
             }
             None => {}
@@ -58,8 +58,8 @@ impl EnclaveRaContext {
     pub fn process_msg_2(
         &mut self,
         mut client_stream: &mut (impl Read + Write),
-    ) -> EnclaveRaResult<(MacTag, MacTag)> {
-        let g_a = self.key_exchange.as_ref().unwrap().get_public_key()?;
+    ) -> Result<(MacTag, MacTag)> {
+        let g_a = self.key_exchange.as_ref().unwrap().get_public_key()?; // safe unwrap
         bincode::serialize_into(&mut client_stream, &g_a)?;
         client_stream.flush()?;
 
@@ -74,7 +74,7 @@ impl EnclaveRaContext {
         let kdk = self
             .key_exchange
             .take()
-            .unwrap()
+            .unwrap() // safe unwrap
             .verify_and_derive(&msg2.g_b, &msg2.sign_gb_ga, &mut self.sp_vkey, &mut rng)?;
         let mut kdk_cmac = Cmac::new(&kdk)?;
         let (smk, sk, mk, vk) = derive_secret_keys(&mut kdk_cmac)?;
@@ -125,9 +125,9 @@ impl EnclaveRaContext {
     pub fn get_quote(
         report_data: &[u8],
         client_stream: &mut (impl Read + Write),
-    ) -> EnclaveRaResult<Quote> {
+    ) -> Result<Quote> {
         if report_data.len() > 64 {
-            return Err(EnclaveRaError::ReportDataLongerThan64Bytes);
+            return Err(EnclaveRaError::ReportDataLongerThan64Bytes.into());
         }
 
         // Obtain QE's target info to build a report for local attestation.

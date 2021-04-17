@@ -12,3 +12,4 @@ regex = "1.3.3"
 base64 = "0.11"
 byteorder = "1.2.1"
 mbedtls = { git = "ssh://git@git.rosetta.ericssondevops.com/gftl-er-5g-hosts/authentic-execution/sgx-attestation/rust-mbedtls", features = ["rdrand"] }
+anyhow = "1.0.38"

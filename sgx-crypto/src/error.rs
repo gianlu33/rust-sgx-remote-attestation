@@ -5,6 +5,7 @@ pub enum CryptoError {
     MbedTls(mbedtls::Error),
     Io(io::Error),
     CmacVerificationError,
+    GenericError(String)
 }
 
 impl std::convert::From<mbedtls::Error> for CryptoError {

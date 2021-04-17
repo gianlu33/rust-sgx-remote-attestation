@@ -4,6 +4,7 @@ use super::signature::{Signature, SigningKey, VerificationKey};
 use mbedtls::ecp::EcPoint;
 use mbedtls::pk::{EcGroupId, Pk};
 use std::io::Write;
+use anyhow::Result;
 
 const ECGROUP_ID: EcGroupId = EcGroupId::SecP256R1;
 const SECRET_SHARE_LEN: usize = 32;
@@ -70,11 +71,11 @@ impl OneWayAuthenticatedDHKE {
         g_a: &DHKEPublicKey,
         signing_key: &mut SigningKey,
         rng: &mut Rng,
-    ) -> super::Result<(KDK, Signature)> {
+    ) -> Result<(KDK, Signature)> {
         // Sign (g_b, g_a) with Bob's signing key
         let mut gb_ga = Vec::new();
-        gb_ga.write_all(&self.inner.get_public_key()?).unwrap();
-        gb_ga.write_all(g_a).unwrap();
+        gb_ga.write_all(&self.inner.get_public_key()?)?;
+        gb_ga.write_all(g_a)?;
         let sign_gb_ga = signing_key.sign(&gb_ga[..], rng)?;
 
         // Derive KDK
@@ -89,14 +90,15 @@ impl OneWayAuthenticatedDHKE {
         sign_gb_ga: &Signature,
         verification_key: &mut VerificationKey,
         rng: &mut Rng,
-    ) -> super::Result<KDK> {
+    ) -> Result<KDK> {
         // Verify (g_b, g_a) with Bob's verification key
         let mut gb_ga = Vec::new();
-        gb_ga.write_all(g_b).unwrap();
-        gb_ga.write_all(&self.inner.get_public_key()?).unwrap();
+        gb_ga.write_all(g_b)?;
+        gb_ga.write_all(&self.inner.get_public_key()?)?;
         verification_key.verify(&gb_ga[..], &sign_gb_ga[..])?;
 
         // Derive KDK
-        self.inner.derive_key(g_b, rng)
+        let kdk = self.inner.derive_key(g_b, rng)?;
+        Ok(kdk)
     }
 }

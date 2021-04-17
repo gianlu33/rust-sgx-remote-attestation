@@ -4,6 +4,7 @@ pub enum ClientRaError {
     Aesm(aesm_client::Error),
     EnclaveNotTrusted,
     PseNotTrusted,
+    GenericError(String)
 }
 
 #[derive(Debug)]
